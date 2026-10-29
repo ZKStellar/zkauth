@@ -20,6 +20,8 @@ pub enum Error {
     NullifierAlreadyUsed = 6,
     CommitmentNotFound = 7,
     InvalidPublicInputsLength = 8,
+    CommitmentAlreadyExists = 9,
+    InvalidAmount = 10,
 }
 
 #[contracttype]
@@ -38,9 +40,28 @@ impl ZkPay {
         env.storage().instance().set(&NATIVE, &native_token);
     }
 
-    pub fn deposit(env: Env, commitment: BytesN<32>, amount: i128) {
+    pub fn deposit(
+        env: Env,
+        depositor: Address,
+        commitment: BytesN<32>,
+        amount: i128,
+    ) -> Result<(), Error> {
+        depositor.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if env.storage().persistent().has(&commitment) {
+            return Err(Error::CommitmentAlreadyExists);
+        }
+
+        let token: Address = env.storage().instance().get(&NATIVE).ok_or(Error::VkNotSet)?;
+        let token_client = TokenClient::new(&env, &token);
+        token_client.transfer(&depositor, &env.current_contract_address(), &amount);
+
         let deposit = Deposit { amount };
         env.storage().persistent().set(&commitment, &deposit);
+        env.storage().persistent().extend_ttl(&commitment, 100_000, 1_000_000);
+        Ok(())
     }
 
     pub fn withdraw(
@@ -81,6 +102,7 @@ impl ZkPay {
             return Err(Error::NullifierAlreadyUsed);
         }
         env.storage().persistent().set(&nullifier, &());
+        env.storage().persistent().extend_ttl(&nullifier, 100_000, 1_000_000);
 
         let deposit: Deposit = env
             .storage()
@@ -105,3 +127,7 @@ impl ZkPay {
         env.storage().persistent().has(&nullifier)
     }
 }
+
+#[cfg(test)]
+mod test;
+
